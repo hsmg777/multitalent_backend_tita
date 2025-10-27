@@ -1,0 +1,145 @@
+# .gitlab-ci.yml
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - when: never
+stages:
+  - test
+  - deploy
+# ===================== TESTS (develop) =====================
+test-backend:
+  stage: test
+  image: python:3.12
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+  services:
+    - name: postgres:15
+      alias: db
+  variables:
+    POSTGRES_DB: multitalent
+    POSTGRES_USER: user
+    POSTGRES_PASSWORD: password
+    DATABASE_URL: postgresql+psycopg2://user:password@db:5432/multitalent
+    SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://user:password@db:5432/multitalent
+    PYTHONDONTWRITEBYTECODE: "1"
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+    PYTHONPATH: "."
+  cache:
+    key: "$CI_JOB_NAME"
+    paths:
+      - .cache/pip
+      - .pytest_cache/
+  before_script:
+    - python -V
+    - pip install -U pip
+    - pip install -r requirements.txt
+  script:
+    - python -m flask --app app.wsgi db upgrade
+    - python -m flask --app app.wsgi seed-admin
+    - python -m pytest -v --maxfail=1 --junitxml=pytest-report.xml
+  artifacts:
+    when: always
+    reports:
+      junit: pytest-report.xml
+    paths:
+      - pytest-report.xml
+      - .pytest_cache/
+# ===================== DEPLOY (main) =====================
+# => Job probado: se respeta tal cual
+deploy-backend-ssh:
+  stage: deploy
+  image: alpine:3.20
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  before_script:
+    - |
+      set -e
+      apk add --no-cache openssh-client bash coreutils git
+      # 0) Localizar y "sanear" tu archivo de variables del repo
+      ENV_FILE="./.env"; [ -f "$ENV_FILE" ] || ENV_FILE="./.env.ci"
+      echo "[CI] Cargando $ENV_FILE"
+      tr -d '\r' < "$ENV_FILE" > /tmp/env.sane
+      # 1) Extraer variables requeridas
+      REQ='^(SSH_HOST|SSH_PORT|SSH_USER|APP_DIR|SSH_PRIVATE_KEY_LN|GIT_USERNAME|GIT_PASSWORD)='
+      if ! grep -Eq "$REQ" /tmp/env.sane; then
+        echo "[CI][ERROR] Faltan variables requeridas (SSH_HOST/SSH_PORT/SSH_USER/APP_DIR/SSH_PRIVATE_KEY_LN/GIT_USERNAME/GIT_PASSWORD)."
+        echo "[CI] Detectado:"; grep -nE '^(SSH_|APP_DIR|GIT_)' /tmp/env.sane || true
+        exit 2
+      fi
+      eval "$(grep -E "$REQ" /tmp/env.sane)"
+      echo "[CI] Destino: ${SSH_USER}@${SSH_HOST}:${SSH_PORT} | APP_DIR=${APP_DIR}"
+      # 2) Reconstruir la llave y cargarla en ssh-agent
+      echo "[CI] Preparando llave SSH…"
+      printf '%b' "${SSH_PRIVATE_KEY_LN}" > /tmp/masterserver2025
+      chmod 600 /tmp/masterserver2025
+      eval "$(ssh-agent -s)"
+      ssh-add /tmp/masterserver2025
+      ssh-keygen -lf /tmp/masterserver2025 || true
+      # 3) Confiar en el host
+      mkdir -p ~/.ssh
+      ssh-keyscan -p "${SSH_PORT}" "${SSH_HOST}" > ~/.ssh/known_hosts
+  script: |
+    echo "[CI] $(date -u +'%F %T') — git pull + docker compose down/up"
+    ssh -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" "APP_DIR='${APP_DIR}' GIT_USERNAME='${GIT_USERNAME}' GIT_PASSWORD='${GIT_PASSWORD}' bash -s" << 'EOSSH'
+    set -euo pipefail
+    log(){ printf '%s %s\n' "[$(date +'%F %T')]" "$*"; }
+    cd "$APP_DIR"
+    log "Directorio: $(pwd)"
+    # ① Forzar username en la URL remota
+    git remote set-url origin "https://${GIT_USERNAME}@gitlab.com/multiapoyo/multitalent-backend.git"
+    # ② askpass que responde Username y Password
+    cat >/tmp/git-askpass.sh <<'EOF'
+    #!/bin/sh
+    case "$1" in
+      *Username*) printf '%s' "$GIT_USERNAME" ;;
+      *Password*) printf '%s' "$GIT_PASSWORD" ;;
+      *) printf '%s' "$GIT_PASSWORD" ;;
+    esac
+    EOF
+    chmod +x /tmp/git-askpass.sh
+    export GIT_ASKPASS=/tmp/git-askpass.sh
+    export GIT_TERMINAL_PROMPT=0
+    log "Remoto:"
+    git remote -v | sed 's@\(^.*https\?://\).*@\1***MASKED***@'
+    log "Antes:"
+    git rev-parse --abbrev-ref HEAD || true
+    git --no-pager log -1 --pretty='format:%h %s (%ci)' || true
+    # Pull no interactivo
+    git fetch origin main
+    git checkout main
+    git pull origin main
+    log "Después:"
+    git --no-pager log -1 --pretty='format:%h %s (%ci)' || true
+    rm -f /tmp/git-askpass.sh || true
+    if [ -f .env ]; then      
+      log "Cargando .env remoto (saneado)…"      
+      # 1) Quitar CRLF      
+      tr -d '\r' < .env > /tmp/env.sane      
+      # 2) Aceptar solo KEY=VALUE (con o sin espacios) o comentarios; preservar el valor completo tras el "="      
+      sed -nE 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=(.*)$/\1=\2/p; t; /^[[:space:]]*#/p' /tmp/env.sane > /tmp/env.clean      
+      # 3) Exportar variables      
+      set -a; . /tmp/env.clean; set +a
+    fi
+    # 🔹 Migraciones ANTES del down
+    # - Sin TTY en CI: usar -i (NO -t)
+    # - Si el contenedor no está arriba, usar 'docker compose run --rm api ...'
+    API_CONTAINER="multitalent-backend-api-1"
+    log "Ejecutando migraciones (Flask-Migrate)…"
+    if docker ps --format '{{.Names}}' | grep -qx "$API_CONTAINER"; then
+      log "Usando contenedor en ejecución: $API_CONTAINER"
+      docker exec -i "$API_CONTAINER" python -m flask --app app.wsgi db upgrade
+    else
+      log "Contenedor no está arriba. Usando 'docker compose run --rm api'..."
+      docker compose run --rm api python -m flask --app app.wsgi db upgrade
+    fi
+    # Docker
+    log "docker compose down…"
+    docker compose down || true
+    log "docker compose build…"
+    docker compose build
+    log "docker compose up -d…"
+    docker compose up -d
+    docker compose ps
+    log "Despliegue backend finalizado."
+    EOSSH

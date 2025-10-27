@@ -1,0 +1,35 @@
+services:
+  api:
+    image: ${IMAGE:-multitalent-backend/api:prod}
+    build:
+      context: .
+    # en local NO expongas 8000; Nginx es el frontal
+    env_file:
+      - .env.example
+      - .env
+    restart: unless-stopped
+    networks:
+      - multitalent_net
+    command: >
+      gunicorn
+      -w ${WEB_CONCURRENCY:-2}
+      -k gthread --threads ${GTHREADS:-8}
+      --timeout ${TIMEOUT:-60}
+      -b 0.0.0.0:8000
+      app.wsgi:app
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - api
+    ports:
+      - "5000:80"             # << host:5000 -> contenedor:80
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped
+    networks:
+      - multitalent_net
+
+networks:
+  multitalent_net:
+    external: true
