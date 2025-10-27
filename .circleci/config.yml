@@ -1,0 +1,114 @@
+version: 2.1
+
+orbs:
+  slack: circleci/slack@4.12.5
+
+jobs:
+  build-and-test:
+    docker:
+      - image: cimg/python:3.12
+      - image: postgres:15
+        environment:
+          POSTGRES_DB: multitalent
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+    environment:
+      DATABASE_URL: postgresql+psycopg2://user:password@localhost:5432/multitalent
+      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://user:password@localhost:5432/multitalent
+      COMPOSE_PROJECT: multitalent_backend
+      COMPOSE_FILE: docker-compose.yml
+
+    working_directory: ~/workspace
+
+    steps:
+      - checkout
+
+      - run:
+          name: 🕐 Esperar que PostgreSQL esté disponible
+          command: |
+            for i in `seq 1 30`;
+            do
+              pg_isready -h localhost -U user && break
+              echo "Esperando PostgreSQL..."
+              sleep 2
+            done
+
+      - run:
+          name: 📦 Instalar dependencias
+          command: |
+            python -m pip install -U pip
+            pip install -r requirements.txt
+
+      - run:
+          name: 🧱 Migrar y poblar base de datos
+          command: |
+            flask --app app.wsgi db upgrade
+            flask --app app.wsgi seed-admin
+
+      - run:
+          name: 🧹 Linter (flake8)
+          command: |
+            pip install flake8
+            flake8 . --count --exit-zero --max-complexity=12 --max-line-length=100 --statistics
+
+      - run:
+          name: 🔍 Type Check (mypy)
+          command: |
+            pip install mypy types-requests types-psycopg2
+            mypy app || true
+
+      - run:
+          name: 🧠 Security Scan (bandit)
+          command: |
+            pip install bandit
+            bandit -r app -f xml -o bandit-report.xml || true
+
+      - run:
+          name: 🧪 Tests (pytest + coverage)
+          command: |
+            pip install pytest pytest-cov
+            pytest -v --maxfail=1 --junitxml=pytest-report.xml --cov=app --cov-report=xml:coverage.xml
+
+      - store_artifacts:
+          path: pytest-report.xml
+          destination: reports/pytest
+      - store_artifacts:
+          path: coverage.xml
+          destination: reports/coverage
+      - store_artifacts:
+          path: bandit-report.xml
+          destination: reports/security
+
+      - slack/notify:
+          event: fail
+          template: basic_fail_1
+      - slack/notify:
+          event: pass
+          template: basic_success_1
+
+  deploy:
+    machine: true
+    steps:
+      - checkout
+      - run:
+          name: 🚀 Deploy con Docker Compose
+          command: |
+            echo "Desplegando servicio..."
+            docker compose pull
+            docker compose down --remove-orphans
+            docker compose up -d --build
+            docker compose ps
+
+workflows:
+  version: 2
+  build_and_deploy:
+    jobs:
+      - build-and-test
+      - deploy:
+          requires:
+            - build-and-test
+          filters:
+            branches:
+              only:
+                - develop
+                - main
