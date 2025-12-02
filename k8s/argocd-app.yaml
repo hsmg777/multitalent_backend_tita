@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: multitalent-backend
+  namespace: argocdspec:
+  project: default
+  source:
+    repoURL: "https://github.com/hsmg777/multitalent_backend_tita.git" # CONFIRMA ESTA URL
+    targetRevision: main
+    path: k8s
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: multitalent
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
