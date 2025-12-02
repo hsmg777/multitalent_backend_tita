@@ -7,6 +7,7 @@ from .ext.db import db
 from .ext.migrate import migrate
 from flask_cors import CORS
 from . import cli as app_cli
+from .feature_flags import init_launchdarkly   # 👈 AÑADIDO
 import logging, sys
 
 
@@ -26,10 +27,7 @@ def create_app(config_name=None):
         handler.setFormatter(fmt)
         root.addHandler(handler)
 
-    # Nivel global INFO
     root.setLevel(logging.INFO)
-
-    # Niveles específicos (opcional)
     logging.getLogger("werkzeug").setLevel(logging.INFO)
     logging.getLogger("app.resources.web_portal.postulation").setLevel(logging.INFO)
     logging.getLogger("app.resources.ai_scoring").setLevel(logging.INFO)
@@ -49,6 +47,9 @@ def create_app(config_name=None):
 
     # Cargar modelos para migraciones
     from . import models  # noqa
+
+    # Inicializar LaunchDarkly 👇
+    init_launchdarkly()
 
     # Blueprints
     register_resources(app)

@@ -19,3 +19,5 @@ pillow==10.4.0
 easyocr==1.7.1
 torch==2.2.2
 numpy==1.26.4
+launchdarkly-server-sdk==8.0.0
+

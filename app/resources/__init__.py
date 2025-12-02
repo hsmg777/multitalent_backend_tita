@@ -10,6 +10,7 @@ from .web_portal.postulation import blp as PublicPostulationsBlp
 from .web_portal.postulation_process import blp as PostulationProcessBlp 
 from .web_portal.personality import blp as WebPortalPersonalityBlp 
 
+from .feature_flags_demo import blp as FeatureFlagsDemoBlp
 
 
 # Recursos administrativos
@@ -50,6 +51,8 @@ def register_resources(app: Flask) -> None:
     api.register_blueprint(UploadsBlp, url_prefix="/api/upload")
     api.register_blueprint(AIScoringBlp, url_prefix="/api")
     api.register_blueprint(TermsBlp, url_prefix="/api/terms")
+    api.register_blueprint(FeatureFlagsDemoBlp, url_prefix="/api")
+
 
 
     # Públicos
