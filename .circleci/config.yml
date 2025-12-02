@@ -1,8 +1,5 @@
 version: 2.1
 
-orbs:
-  slack: circleci/slack@4.12.5
-
 jobs:
   build-and-test:
     docker:
@@ -79,12 +76,25 @@ jobs:
           path: bandit-report.xml
           destination: reports/security
 
-      - slack/notify:
-          event: fail
-          template: basic_fail_1
-      - slack/notify:
-          event: pass
-          template: basic_success_1
+      # ✅ Notificación Telegram - Éxito
+      - run:
+          name: ✅ Notificar éxito en Telegram
+          when: on_success
+          command: |
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="${TELEGRAM_CHAT_ID}" \
+              -d text="✅ *Build completado correctamente en CircleCI!*%0AProyecto: multitalent_backend_tita%0ARama: ${CIRCLE_BRANCH}%0AJob: ${CIRCLE_JOB}%0A🔗 [Ver detalles en CircleCI](${CIRCLE_BUILD_URL})" \
+              -d parse_mode="Markdown"
+
+      # ❌ Notificación Telegram - Falla
+      - run:
+          name: ❌ Notificar fallo en Telegram
+          when: on_fail
+          command: |
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="${TELEGRAM_CHAT_ID}" \
+              -d text="❌ *Build falló!*%0AProyecto: multitalent_backend_tita%0ARama: ${CIRCLE_BRANCH}%0AJob: ${CIRCLE_JOB}%0A🔗 [Ver errores en CircleCI](${CIRCLE_BUILD_URL})" \
+              -d parse_mode="Markdown"
 
   deploy:
     machine: true
@@ -98,6 +108,17 @@ jobs:
             docker compose down --remove-orphans
             docker compose up -d --build
             docker compose ps
+            echo "✅ Deploy completado correctamente."
+
+      # 📲 Notificación de despliegue Telegram
+      - run:
+          name: 🚀 Notificar despliegue
+          when: on_success
+          command: |
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="${TELEGRAM_CHAT_ID}" \
+              -d text="🚀 *Despliegue completado correctamente!*%0AProyecto: multitalent_backend_tita%0ARama: ${CIRCLE_BRANCH}%0A🔗 [Ver build en CircleCI](${CIRCLE_BUILD_URL})" \
+              -d parse_mode="Markdown"
 
 workflows:
   version: 2
