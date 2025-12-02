@@ -4,7 +4,7 @@ metadata:
   name: api
   namespace: multitalent
 spec:
-  replicas: 2
+  replicas: 3
   selector:
     matchLabels:
       app: api
