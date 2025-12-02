@@ -4,7 +4,7 @@ metadata:
   name: api
   namespace: multitalent
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: api
@@ -15,11 +15,10 @@ spec:
     spec:
       containers:
         - name: api
-          image: hsmg7777/multitalent-backend-api:prod   # 👈 tu imagen de Docker Hub
+          image: hsmg7777/multitalent-backend-api:prod   
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
-          # Comando igual que en docker-compose (simplificado)
           command: ["gunicorn"]
           args:
             [
