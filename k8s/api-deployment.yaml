@@ -15,8 +15,8 @@ spec:
     spec:
       containers:
         - name: api
-          image: hsmg7777/multitalent-backend-api:prod   
-          imagePullPolicy: Always
+          image: ghcr.io/hsmg777/multitalent_backend_tita/api:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
           command: ["gunicorn"]
@@ -30,11 +30,12 @@ spec:
               "app.wsgi:app"
             ]
           env:
-            # EJEMPLOS: aquí luego copias variables de tu .env
             - name: FLASK_ENV
               value: "production"
-            # - name: DATABASE_URL
-            #   valueFrom:
-            #     secretKeyRef:
-            #       name: api-secrets
-            #       key: DATABASE_URL
+            - name: LD_SDK_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: LD_SDK_KEY
+
+
