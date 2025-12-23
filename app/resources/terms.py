@@ -26,7 +26,7 @@ class TermsAcceptances(MethodView):
         if not is_feature_enabled("terms-acceptance-enabled", str(user_id)):
             abort(
                 403,
-                message="La aceptación de términos está temporalmente deshabilitadesss. Intenta más tarde.",
+                message="La aceptación de términos está temporalmente deshabilitadO. Intenta más tarde.",
             )
 
         # Comportamiento normal cuando el flag está ON
