@@ -157,7 +157,7 @@ jobs:
       - run:
           name: ensure-env-file
           command: |
-            printf "RESET_TOKEN_HOURS=2\n" > .env
+            printf "RESET_TOKEN_HOURS=2\nMAIL_PORT=587\n" > .env
 
       - run:
           name: up-db-api
