@@ -110,6 +110,11 @@ jobs:
             docker network create multitalent_net || true
 
       - run:
+          name: ensure-env-file
+          command: |
+            test -f .env || touch .env
+
+      - run:
           name: up-sonarqube
           command: |
             docker compose up -d sonar_db sonarqube
