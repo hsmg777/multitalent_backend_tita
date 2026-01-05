@@ -12,8 +12,6 @@ jobs:
     environment:
       DATABASE_URL: postgresql+psycopg2://user:password@localhost:5432/multitalent
       SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://user:password@localhost:5432/multitalent
-      COMPOSE_PROJECT: multitalent_backend
-      COMPOSE_FILE: docker-compose.yml
     working_directory: ~/workspace
     steps:
       - checkout
@@ -21,8 +19,7 @@ jobs:
       - run:
           name: wait-postgres
           command: |
-            for i in `seq 1 30`;
-            do
+            for i in `seq 1 30`; do
               pg_isready -h localhost -U user && break
               sleep 2
             done
@@ -100,57 +97,107 @@ jobs:
               -d parse_mode="Markdown"
 
   sonarqube-scan:
-    docker:
-      - image: sonarsource/sonar-scanner-cli:latest
-    working_directory: /usr/src
+    machine: true
+    working_directory: ~/project
     steps:
       - checkout
       - attach_workspace:
-          at: /usr/src
+          at: ~/project
+
+      - run:
+          name: create-network
+          command: |
+            docker network create multitalent_net || true
+
+      - run:
+          name: up-sonarqube
+          command: |
+            docker compose up -d sonar_db sonarqube
+
+      - run:
+          name: wait-sonarqube-up
+          command: |
+            for i in $(seq 1 90); do
+              STATUS=$(curl -s http://localhost:9000/api/system/status | grep -o 'UP\|STARTING\|DOWN' || true)
+              echo "SonarQube status: $STATUS"
+              if [ "$STATUS" = "UP" ]; then exit 0; fi
+              sleep 2
+            done
+            echo "SonarQube no subió a UP"
+            docker compose logs sonarqube || true
+            exit 1
+
       - run:
           name: sonar-scan
           command: |
-            sonar-scanner \
-              -Dsonar.host.url=${SONAR_HOST_URL} \
-              -Dsonar.login=${SONAR_TOKEN} \
-              -Dsonar.qualitygate.wait=true
+            docker run --rm --network host \
+              -v "$(pwd):/usr/src" \
+              -w /usr/src \
+              sonarsource/sonar-scanner-cli:latest \
+              sonar-scanner \
+                -Dsonar.host.url=http://localhost:9000 \
+                -Dsonar.login=${SONAR_TOKEN} \
+                -Dsonar.qualitygate.wait=true
+
+      - run:
+          name: down-sonarqube
+          when: always
+          command: |
+            docker compose down -v
 
   zap-dast:
     machine: true
     working_directory: ~/project
     steps:
       - checkout
+
       - run:
-          name: up-app
+          name: create-network
           command: |
-            docker compose -f docker-compose.dast.yml up -d --build
+            docker network create multitalent_net || true
+
       - run:
-          name: wait-nginx
+          name: ensure-env-file
           command: |
-            for i in `seq 1 60`; do
-              curl -sSf "http://localhost:5000" >/dev/null 2>&1 && exit 0
+            test -f .env || touch .env
+
+      - run:
+          name: up-api
+          command: |
+            docker compose up -d --build api
+
+      - run:
+          name: wait-api
+          command: |
+            for i in $(seq 1 60); do
+              curl -sSf "http://localhost:8000/docs" >/dev/null 2>&1 && exit 0
+              echo "Esperando API..."
               sleep 2
             done
+            echo "API no respondió en /docs"
+            docker compose logs api || true
             exit 1
+
       - run:
           name: zap-baseline
           command: |
-            TARGET="${ZAP_TARGET:-http://localhost:5000}"
             docker run --rm --network host \
               -v "$(pwd):/zap/wrk" \
               owasp/zap2docker-stable \
-              zap-baseline.py -t "$TARGET" -r zap-report.html -J zap-report.json || true
+              zap-baseline.py -t "http://localhost:8000/docs" -r zap-report.html -J zap-report.json || true
+
       - store_artifacts:
           path: zap-report.html
           destination: reports/zap
       - store_artifacts:
           path: zap-report.json
           destination: reports/zap
+
       - run:
-          name: down-app
+          name: down-api
           when: always
           command: |
-            docker compose -f docker-compose.dast.yml down -v
+            docker compose down -v
 
   deploy:
     machine: true
@@ -161,7 +208,7 @@ jobs:
           command: |
             docker compose pull
             docker compose down --remove-orphans
-            docker compose up -d --build
+            docker compose up -d --build api
             docker compose ps
       - run:
           name: telegram-deploy
