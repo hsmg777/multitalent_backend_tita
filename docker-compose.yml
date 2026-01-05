@@ -1,4 +1,18 @@
 services:
+  # --- DB de tu API (necesaria para que /docs responda en CI/ZAP) ---
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: multitalent
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    volumes:
+      - api_db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - multitalent_net
+
+  # --- API ---
   api:
     image: ${IMAGE:-multitalent-backend/api:prod}
     build:
@@ -6,6 +20,11 @@ services:
     env_file:
       - .env.example
       - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://user:password@db:5432/multitalent
+      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://user:password@db:5432/multitalent
+    depends_on:
+      - db
     restart: unless-stopped
     networks:
       - multitalent_net
@@ -19,6 +38,7 @@ services:
     ports:
       - "8000:8000"
 
+  # --- Sonar DB ---
   sonar_db:
     image: postgres:15
     environment:
@@ -31,6 +51,7 @@ services:
     networks:
       - multitalent_net
 
+  # --- SonarQube ---
   sonarqube:
     image: sonarqube:lts-community
     depends_on:
@@ -50,14 +71,16 @@ services:
     networks:
       - multitalent_net
 
+  # --- ZAP (solo para correr herramientas si quieres en local) ---
   zap:
     image: owasp/zap2docker-stable
-    networks:
-      - multitalent_net
     profiles: ["tools"]
     entrypoint: ["sleep", "infinity"]
+    networks:
+      - multitalent_net
 
 volumes:
+  api_db_data:
   sonar_db_data:
   sonarqube_data:
   sonarqube_extensions:

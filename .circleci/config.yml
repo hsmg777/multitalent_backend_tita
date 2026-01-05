@@ -78,24 +78,6 @@ jobs:
             - bandit-report.xml
             - sonar-project.properties
 
-      - run:
-          name: telegram-success
-          when: on_success
-          command: |
-            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-              -d chat_id="${TELEGRAM_CHAT_ID}" \
-              -d text="✅ *Build completado correctamente en CircleCI!*%0AProyecto: multitalent_backend_tita%0ARama: ${CIRCLE_BRANCH}%0AJob: ${CIRCLE_JOB}%0A🔗 [Ver detalles en CircleCI](${CIRCLE_BUILD_URL})" \
-              -d parse_mode="Markdown"
-
-      - run:
-          name: telegram-fail
-          when: on_fail
-          command: |
-            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-              -d chat_id="${TELEGRAM_CHAT_ID}" \
-              -d text="❌ *Build falló!*%0AProyecto: multitalent_backend_tita%0ARama: ${CIRCLE_BRANCH}%0AJob: ${CIRCLE_JOB}%0A🔗 [Ver errores en CircleCI](${CIRCLE_BUILD_URL})" \
-              -d parse_mode="Markdown"
-
   sonarqube-scan:
     machine: true
     working_directory: ~/project
@@ -122,7 +104,7 @@ jobs:
       - run:
           name: wait-sonarqube-up
           command: |
-            for i in $(seq 1 90); do
+            for i in $(seq 1 120); do
               STATUS=$(curl -s http://localhost:9000/api/system/status | grep -o 'UP\|STARTING\|DOWN' || true)
               echo "SonarQube status: $STATUS"
               if [ "$STATUS" = "UP" ]; then exit 0; fi
@@ -133,15 +115,27 @@ jobs:
             exit 1
 
       - run:
+          name: generate-sonar-token
+          command: |
+            set -e
+            TOKEN_JSON=$(curl -s -u admin:admin -X POST "http://localhost:9000/api/user_tokens/generate" \
+              -d "name=circleci-$(date +%s)")
+            echo "$TOKEN_JSON" | sed 's/./&/g' >/dev/null
+            SONAR_CI_TOKEN=$(echo "$TOKEN_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+            echo "export SONAR_CI_TOKEN=$SONAR_CI_TOKEN" >> "$BASH_ENV"
+            source "$BASH_ENV"
+
+      - run:
           name: sonar-scan
           command: |
+            source "$BASH_ENV"
             docker run --rm --network host \
               -v "$(pwd):/usr/src" \
               -w /usr/src \
               sonarsource/sonar-scanner-cli:latest \
               sonar-scanner \
                 -Dsonar.host.url=http://localhost:9000 \
-                -Dsonar.login=${SONAR_TOKEN} \
+                -Dsonar.login=${SONAR_CI_TOKEN} \
                 -Dsonar.qualitygate.wait=true
 
       - run:
@@ -167,29 +161,42 @@ jobs:
             test -f .env || touch .env
 
       - run:
-          name: up-api
+          name: up-db-api
           command: |
-            docker compose up -d --build api
+            docker compose up -d --build db api
 
       - run:
-          name: wait-api
+          name: wait-api-docs
           command: |
-            for i in $(seq 1 60); do
-              curl -sSf "http://localhost:8000/docs" >/dev/null 2>&1 && exit 0
+            for i in $(seq 1 90); do
+              for path in /docs /docs/ /api-docs /api-docs/; do
+                code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:8000${path}" || true)
+                if [ "$code" -ge 200 ] && [ "$code" -lt 400 ]; then
+                  echo "API OK en ${path} (HTTP $code)"
+                  echo "export ZAP_TARGET=http://localhost:8000${path}" >> "$BASH_ENV"
+                  source "$BASH_ENV"
+                  exit 0
+                fi
+              done
               echo "Esperando API..."
+              if [ $i -eq 20 ] || [ $i -eq 45 ] || [ $i -eq 75 ]; then
+                docker compose ps || true
+                docker compose logs --tail=120 api || true
+              fi
               sleep 2
             done
-            echo "API no respondió en /docs"
+            echo "API no respondió en docs/api-docs"
             docker compose logs api || true
             exit 1
 
       - run:
           name: zap-baseline
           command: |
+            source "$BASH_ENV"
             docker run --rm --network host \
               -v "$(pwd):/zap/wrk" \
               owasp/zap2docker-stable \
-              zap-baseline.py -t "http://localhost:8000/docs" -r zap-report.html -J zap-report.json || true
+              zap-baseline.py -t "${ZAP_TARGET}" -r zap-report.html -J zap-report.json || true
 
       - store_artifacts:
           path: zap-report.html
@@ -199,30 +206,10 @@ jobs:
           destination: reports/zap
 
       - run:
-          name: down-api
+          name: down
           when: always
           command: |
             docker compose down -v
-
-  deploy:
-    machine: true
-    steps:
-      - checkout
-      - run:
-          name: deploy
-          command: |
-            docker compose pull
-            docker compose down --remove-orphans
-            docker compose up -d --build api
-            docker compose ps
-      - run:
-          name: telegram-deploy
-          when: on_success
-          command: |
-            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-              -d chat_id="${TELEGRAM_CHAT_ID}" \
-              -d text="🚀 *Despliegue completado correctamente!*%0AProyecto: multitalent_backend_tita%0ARama: ${CIRCLE_BRANCH}%0A🔗 [Ver build en CircleCI](${CIRCLE_BUILD_URL})" \
-              -d parse_mode="Markdown"
 
 workflows:
   version: 2
@@ -235,12 +222,3 @@ workflows:
       - zap-dast:
           requires:
             - build-and-test
-      - deploy:
-          requires:
-            - sonarqube-scan
-            - zap-dast
-          filters:
-            branches:
-              only:
-                - develop
-                - main
