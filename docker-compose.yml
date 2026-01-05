@@ -1,10 +1,24 @@
 services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-multitalent}
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - multitalent_net
+
   api:
     image: ${IMAGE:-multitalent-backend/api:prod}
     build:
       context: .
     env_file:
       - .env
+    depends_on:
+      - db
     restart: unless-stopped
     networks:
       - multitalent_net
@@ -50,6 +64,7 @@ services:
       - multitalent_net
 
 volumes:
+  db_data:
   sonar_db_data:
   sonarqube_data:
   sonarqube_extensions:

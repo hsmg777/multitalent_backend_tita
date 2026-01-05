@@ -157,12 +157,18 @@ jobs:
       - run:
           name: ensure-env-file
           command: |
-            printf "RESET_TOKEN_HOURS=2\nMAIL_PORT=587\n" > .env
+            printf "POSTGRES_DB=multitalent\nPOSTGRES_USER=user\nPOSTGRES_PASSWORD=password\nDB_HOST=db\nDB_PORT=5432\nDATABASE_URL=postgresql+psycopg2://user:password@db:5432/multitalent\nSQLALCHEMY_DATABASE_URI=postgresql+psycopg2://user:password@db:5432/multitalent\nRESET_TOKEN_HOURS=2\nMAIL_PORT=587\nSECRET_KEY=circleci_dummy_secret\n" > .env
+
+      - run:
+          name: show-services
+          command: |
+            docker compose config --services
 
       - run:
           name: up-db-api
           command: |
             docker compose up -d --build db api
+            docker compose ps
 
       - run:
           name: wait-api-docs
@@ -180,12 +186,14 @@ jobs:
               echo "Esperando API..."
               if [ $i -eq 20 ] || [ $i -eq 45 ] || [ $i -eq 75 ]; then
                 docker compose ps || true
-                docker compose logs --tail=120 api || true
+                docker compose logs --tail=160 api || true
               fi
               sleep 2
             done
+
             echo "API no respondió en docs/api-docs"
             docker compose logs api || true
+            docker compose logs db || true
             exit 1
 
       - run:
@@ -200,6 +208,7 @@ jobs:
       - store_artifacts:
           path: zap-report.html
           destination: reports/zap
+
       - store_artifacts:
           path: zap-report.json
           destination: reports/zap
@@ -209,6 +218,7 @@ jobs:
           when: always
           command: |
             docker compose down -v
+
 
 workflows:
   version: 2
