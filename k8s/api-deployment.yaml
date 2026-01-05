@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: ghcr.io/hsmg777/multitalent_backend_tita/api:dc4e2c32d11932de4e9b94a1f7b0074e63d42ac7
+          image: ghcr.io/hsmg777/multitalent_backend_tita/api:c77764cd20cb20ec1e748c802ee530269c16bc9e
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
