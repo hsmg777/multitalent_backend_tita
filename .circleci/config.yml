@@ -94,7 +94,7 @@ jobs:
       - run:
           name: ensure-env-file
           command: |
-            test -f .env || touch .env
+            printf "RESET_TOKEN_HOURS=2\n" > .env
 
       - run:
           name: up-sonarqube
@@ -120,7 +120,6 @@ jobs:
             set -e
             TOKEN_JSON=$(curl -s -u admin:admin -X POST "http://localhost:9000/api/user_tokens/generate" \
               -d "name=circleci-$(date +%s)")
-            echo "$TOKEN_JSON" | sed 's/./&/g' >/dev/null
             SONAR_CI_TOKEN=$(echo "$TOKEN_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
             echo "export SONAR_CI_TOKEN=$SONAR_CI_TOKEN" >> "$BASH_ENV"
             source "$BASH_ENV"
@@ -158,10 +157,7 @@ jobs:
       - run:
           name: ensure-env-file
           command: |
-            cat > .env << 'EOF'
-            RESET_TOKEN_HOURS=2
-            EOF
-
+            printf "RESET_TOKEN_HOURS=2\n" > .env
 
       - run:
           name: up-db-api
