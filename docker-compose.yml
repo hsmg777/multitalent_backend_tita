@@ -3,7 +3,6 @@ services:
     image: ${IMAGE:-multitalent-backend/api:prod}
     build:
       context: .
-    # en local NO expongas 8000; Nginx es el frontal
     env_file:
       - .env.example
       - .env
@@ -17,18 +16,52 @@ services:
       --timeout ${TIMEOUT:-60}
       -b 0.0.0.0:8000
       app.wsgi:app
-
-  nginx:
-    image: nginx:1.27-alpine
-    depends_on:
-      - api
     ports:
-      - "5000:80"             # << host:5000 -> contenedor:80
+      - "8000:8000"
+
+  sonar_db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: sonar
+      POSTGRES_PASSWORD: sonar
+      POSTGRES_DB: sonarqube
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - sonar_db_data:/var/lib/postgresql/data
     restart: unless-stopped
     networks:
       - multitalent_net
+
+  sonarqube:
+    image: sonarqube:lts-community
+    depends_on:
+      - sonar_db
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://sonar_db:5432/sonarqube
+      SONAR_JDBC_USERNAME: sonar
+      SONAR_JDBC_PASSWORD: sonar
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    ports:
+      - "9000:9000"
+    restart: unless-stopped
+    networks:
+      - multitalent_net
+
+  zap:
+    image: owasp/zap2docker-stable
+    networks:
+      - multitalent_net
+    profiles: ["tools"]
+    entrypoint: ["sleep", "infinity"]
+
+volumes:
+  sonar_db_data:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:
 
 networks:
   multitalent_net:

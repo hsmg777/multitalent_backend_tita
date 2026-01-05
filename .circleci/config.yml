@@ -14,54 +14,51 @@ jobs:
       SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://user:password@localhost:5432/multitalent
       COMPOSE_PROJECT: multitalent_backend
       COMPOSE_FILE: docker-compose.yml
-
     working_directory: ~/workspace
-
     steps:
       - checkout
 
       - run:
-          name: 🕐 Esperar que PostgreSQL esté disponible
+          name: wait-postgres
           command: |
             for i in `seq 1 30`;
             do
               pg_isready -h localhost -U user && break
-              echo "Esperando PostgreSQL..."
               sleep 2
             done
 
       - run:
-          name: 📦 Instalar dependencias
+          name: install-deps
           command: |
             python -m pip install -U pip
             pip install -r requirements.txt
 
       - run:
-          name: 🧱 Migrar y poblar base de datos
+          name: migrate-seed
           command: |
             flask --app app.wsgi db upgrade
             flask --app app.wsgi seed-admin
 
       - run:
-          name: 🧹 Linter (flake8)
+          name: flake8
           command: |
             pip install flake8
             flake8 . --count --exit-zero --max-complexity=12 --max-line-length=100 --statistics
 
       - run:
-          name: 🔍 Type Check (mypy)
+          name: mypy
           command: |
             pip install mypy types-requests types-psycopg2
             mypy app || true
 
       - run:
-          name: 🧠 Security Scan (bandit)
+          name: bandit
           command: |
             pip install bandit
             bandit -r app -f xml -o bandit-report.xml || true
 
       - run:
-          name: 🧪 Tests (pytest + coverage)
+          name: pytest
           command: |
             pip install pytest pytest-cov
             pytest -v --maxfail=1 --junitxml=pytest-report.xml --cov=app --cov-report=xml:coverage.xml
@@ -76,9 +73,16 @@ jobs:
           path: bandit-report.xml
           destination: reports/security
 
-      # ✅ Notificación Telegram - Éxito
+      - persist_to_workspace:
+          root: .
+          paths:
+            - coverage.xml
+            - pytest-report.xml
+            - bandit-report.xml
+            - sonar-project.properties
+
       - run:
-          name: ✅ Notificar éxito en Telegram
+          name: telegram-success
           when: on_success
           command: |
             curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
@@ -86,9 +90,8 @@ jobs:
               -d text="✅ *Build completado correctamente en CircleCI!*%0AProyecto: multitalent_backend_tita%0ARama: ${CIRCLE_BRANCH}%0AJob: ${CIRCLE_JOB}%0A🔗 [Ver detalles en CircleCI](${CIRCLE_BUILD_URL})" \
               -d parse_mode="Markdown"
 
-      # ❌ Notificación Telegram - Falla
       - run:
-          name: ❌ Notificar fallo en Telegram
+          name: telegram-fail
           when: on_fail
           command: |
             curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
@@ -96,23 +99,72 @@ jobs:
               -d text="❌ *Build falló!*%0AProyecto: multitalent_backend_tita%0ARama: ${CIRCLE_BRANCH}%0AJob: ${CIRCLE_JOB}%0A🔗 [Ver errores en CircleCI](${CIRCLE_BUILD_URL})" \
               -d parse_mode="Markdown"
 
+  sonarqube-scan:
+    docker:
+      - image: sonarsource/sonar-scanner-cli:latest
+    working_directory: /usr/src
+    steps:
+      - checkout
+      - attach_workspace:
+          at: /usr/src
+      - run:
+          name: sonar-scan
+          command: |
+            sonar-scanner \
+              -Dsonar.host.url=${SONAR_HOST_URL} \
+              -Dsonar.login=${SONAR_TOKEN} \
+              -Dsonar.qualitygate.wait=true
+
+  zap-dast:
+    machine: true
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: up-app
+          command: |
+            docker compose -f docker-compose.dast.yml up -d --build
+      - run:
+          name: wait-nginx
+          command: |
+            for i in `seq 1 60`; do
+              curl -sSf "http://localhost:5000" >/dev/null 2>&1 && exit 0
+              sleep 2
+            done
+            exit 1
+      - run:
+          name: zap-baseline
+          command: |
+            TARGET="${ZAP_TARGET:-http://localhost:5000}"
+            docker run --rm --network host \
+              -v "$(pwd):/zap/wrk" \
+              owasp/zap2docker-stable \
+              zap-baseline.py -t "$TARGET" -r zap-report.html -J zap-report.json || true
+      - store_artifacts:
+          path: zap-report.html
+          destination: reports/zap
+      - store_artifacts:
+          path: zap-report.json
+          destination: reports/zap
+      - run:
+          name: down-app
+          when: always
+          command: |
+            docker compose -f docker-compose.dast.yml down -v
+
   deploy:
     machine: true
     steps:
       - checkout
       - run:
-          name: 🚀 Deploy con Docker Compose
+          name: deploy
           command: |
-            echo "Desplegando servicio..."
             docker compose pull
             docker compose down --remove-orphans
             docker compose up -d --build
             docker compose ps
-            echo "✅ Deploy completado correctamente."
-
-      # 📲 Notificación de despliegue Telegram
       - run:
-          name: 🚀 Notificar despliegue
+          name: telegram-deploy
           when: on_success
           command: |
             curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
@@ -125,9 +177,16 @@ workflows:
   build_and_deploy:
     jobs:
       - build-and-test
-      - deploy:
+      - sonarqube-scan:
           requires:
             - build-and-test
+      - zap-dast:
+          requires:
+            - build-and-test
+      - deploy:
+          requires:
+            - sonarqube-scan
+            - zap-dast
           filters:
             branches:
               only:
