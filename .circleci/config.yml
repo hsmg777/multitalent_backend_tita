@@ -158,7 +158,10 @@ jobs:
       - run:
           name: ensure-env-file
           command: |
-            test -f .env || touch .env
+            cat > .env << 'EOF'
+            RESET_TOKEN_HOURS=2
+            EOF
+
 
       - run:
           name: up-db-api
