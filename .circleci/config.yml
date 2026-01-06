@@ -65,9 +65,11 @@ jobs:
       - store_artifacts:
           path: pytest-report.xml
           destination: reports/pytest
+
       - store_artifacts:
           path: coverage.xml
           destination: reports/coverage
+
       - store_artifacts:
           path: bandit-report.xml
           destination: reports/security
@@ -107,14 +109,13 @@ jobs:
               if [ "$status" = "UP" ]; then exit 0; fi
               sleep 2
             done
-            echo "SonarQube no subió a UP"
+            echo "SonarQube no subio a UP"
             docker compose logs sonarqube || true
             exit 1
 
       - run:
           name: sonar-scan
           command: |
-            # Asegura que los reportes existan en este job (vienen del workspace)
             ls -lah coverage.xml pytest-report.xml bandit-report.xml sonar-project.properties || true
 
             docker run --rm --network host \
@@ -149,7 +150,6 @@ jobs:
       - run:
           name: ensure-env-file
           command: |
-            # Evita heredoc << que te está rompiendo el pipeline
             printf "%s\n" \
               "POSTGRES_DB=multitalent" \
               "POSTGRES_USER=user" \
@@ -195,7 +195,7 @@ jobs:
               sleep 2
             done
 
-            echo "API no respondió en docs/api-docs"
+            echo "API no respondio en docs/api-docs"
             docker compose logs api || true
             docker compose logs db || true
             exit 1
@@ -222,7 +222,6 @@ jobs:
           when: always
           command: |
             docker compose down -v
-
 
 workflows:
   version: 2
