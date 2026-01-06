@@ -104,15 +104,6 @@ jobs:
             echo "SONAR_HOST_URL=${SONAR_HOST_URL}"
 
       - run:
-          name: verify-sonar-files
-          command: |
-            ls -lah
-            test -f sonar-project.properties || (echo "No existe sonar-project.properties" && exit 1)
-            test -f coverage.xml || echo "WARN: no existe coverage.xml"
-            test -f pytest-report.xml || echo "WARN: no existe pytest-report.xml"
-            test -f bandit-report.xml || echo "WARN: no existe bandit-report.xml"
-
-      - run:
           name: sonar-scan
           command: |
             docker run --rm \
@@ -141,18 +132,19 @@ jobs:
       - run:
           name: ensure-env-file
           command: |
-            cat > .env << 'EOF'
-            POSTGRES_DB=multitalent
-            POSTGRES_USER=user
-            POSTGRES_PASSWORD=password
-            DB_HOST=db
-            DB_PORT=5432
-            DATABASE_URL=postgresql+psycopg2://user:password@db:5432/multitalent
-            SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://user:password@db:5432/multitalent
-            RESET_TOKEN_HOURS=2
-            MAIL_PORT=587
-            SECRET_KEY=circleci_dummy_secret
-            EOF
+            rm -f .env
+            printf "POSTGRES_DB=multitalent\n" >> .env
+            printf "POSTGRES_USER=user\n" >> .env
+            printf "POSTGRES_PASSWORD=password\n" >> .env
+            printf "DB_HOST=db\n" >> .env
+            printf "DB_PORT=5432\n" >> .env
+            printf "DATABASE_URL=postgresql+psycopg2://user:password@db:5432/multitalent\n" >> .env
+            printf "SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://user:password@db:5432/multitalent\n" >> .env
+            printf "RESET_TOKEN_HOURS=2\n" >> .env
+            printf "MAIL_PORT=587\n" >> .env
+            printf "SECRET_KEY=circleci_dummy_secret\n" >> .env
+            echo ".env creado:"
+            cat .env
 
       - run:
           name: show-services
