@@ -9,20 +9,25 @@ jobs:
           POSTGRES_DB: multitalent
           POSTGRES_USER: user
           POSTGRES_PASSWORD: password
+
     environment:
-      DATABASE_URL: postgresql+psycopg2://user:password@localhost:5432/multitalent
-      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://user:password@localhost:5432/multitalent
+      DATABASE_URL: postgresql+psycopg2://user:password@127.0.0.1:5432/multitalent
+      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://user:password@127.0.0.1:5432/multitalent
+
     working_directory: ~/workspace
+
     steps:
       - checkout
 
       - run:
           name: wait-postgres
           command: |
-            for i in `seq 1 30`; do
-              pg_isready -h localhost -U user && break
+            for i in $(seq 1 30); do
+              pg_isready -h 127.0.0.1 -U user && exit 0
               sleep 2
             done
+            echo "Postgres no estuvo listo a tiempo"
+            exit 1
 
       - run:
           name: install-deps
@@ -63,9 +68,11 @@ jobs:
       - store_artifacts:
           path: pytest-report.xml
           destination: reports/pytest
+
       - store_artifacts:
           path: coverage.xml
           destination: reports/coverage
+
       - store_artifacts:
           path: bandit-report.xml
           destination: reports/security
@@ -78,86 +85,74 @@ jobs:
             - bandit-report.xml
             - sonar-project.properties
 
+
   sonarqube-scan:
     machine: true
     working_directory: ~/project
+
     steps:
       - checkout
+
       - attach_workspace:
           at: ~/project
 
       - run:
-          name: create-network
+          name: validate-sonar-env
           command: |
-            docker network create multitalent_net || true
+            if [ -z "${SONAR_HOST_URL}" ]; then echo "Falta SONAR_HOST_URL"; exit 1; fi
+            if [ -z "${SONAR_TOKEN}" ]; then echo "Falta SONAR_TOKEN"; exit 1; fi
+            echo "SONAR_HOST_URL=${SONAR_HOST_URL}"
 
       - run:
-          name: ensure-env-file
+          name: verify-sonar-files
           command: |
-            printf "RESET_TOKEN_HOURS=2\n" > .env
-
-      - run:
-          name: up-sonarqube
-          command: |
-            docker compose up -d sonar_db sonarqube
-
-      - run:
-          name: wait-sonarqube-up
-          command: |
-            for i in $(seq 1 120); do
-              STATUS=$(curl -s http://localhost:9000/api/system/status | grep -o 'UP\|STARTING\|DOWN' || true)
-              echo "SonarQube status: $STATUS"
-              if [ "$STATUS" = "UP" ]; then exit 0; fi
-              sleep 2
-            done
-            echo "SonarQube no subió a UP"
-            docker compose logs sonarqube || true
-            exit 1
-
-      - run:
-          name: generate-sonar-token
-          command: |
-            set -e
-            TOKEN_JSON=$(curl -s -u admin:admin -X POST "http://localhost:9000/api/user_tokens/generate" \
-              -d "name=circleci-$(date +%s)")
-            SONAR_CI_TOKEN=$(echo "$TOKEN_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
-            echo "export SONAR_CI_TOKEN=$SONAR_CI_TOKEN" >> "$BASH_ENV"
-            source "$BASH_ENV"
+            ls -lah
+            test -f sonar-project.properties || (echo "No existe sonar-project.properties" && exit 1)
+            test -f coverage.xml || echo "WARN: no existe coverage.xml"
+            test -f pytest-report.xml || echo "WARN: no existe pytest-report.xml"
+            test -f bandit-report.xml || echo "WARN: no existe bandit-report.xml"
 
       - run:
           name: sonar-scan
           command: |
-            source "$BASH_ENV"
-            docker run --rm --network host \
+            docker run --rm \
               -v "$(pwd):/usr/src" \
               -w /usr/src \
               sonarsource/sonar-scanner-cli:latest \
               sonar-scanner \
-                -Dsonar.host.url=http://localhost:9000 \
-                -Dsonar.login=${SONAR_CI_TOKEN} \
-                -Dsonar.qualitygate.wait=true
+                -Dsonar.host.url="${SONAR_HOST_URL}" \
+                -Dsonar.token="${SONAR_TOKEN}" \
+                -Dsonar.qualitygate.wait=true \
+                -Dsonar.projectVersion="${CIRCLE_SHA1}"
 
-      - run:
-          name: down-sonarqube
-          when: always
-          command: |
-            docker compose down -v
 
   zap-dast:
     machine: true
     working_directory: ~/project
+
     steps:
       - checkout
 
       - run:
           name: create-network
           command: |
-            docker network create multitalent_net || true
+            docker network inspect multitalent_net >/dev/null 2>&1 || docker network create multitalent_net
 
       - run:
           name: ensure-env-file
           command: |
-            printf "POSTGRES_DB=multitalent\nPOSTGRES_USER=user\nPOSTGRES_PASSWORD=password\nDB_HOST=db\nDB_PORT=5432\nDATABASE_URL=postgresql+psycopg2://user:password@db:5432/multitalent\nSQLALCHEMY_DATABASE_URI=postgresql+psycopg2://user:password@db:5432/multitalent\nRESET_TOKEN_HOURS=2\nMAIL_PORT=587\nSECRET_KEY=circleci_dummy_secret\n" > .env
+            cat > .env << 'EOF'
+            POSTGRES_DB=multitalent
+            POSTGRES_USER=user
+            POSTGRES_PASSWORD=password
+            DB_HOST=db
+            DB_PORT=5432
+            DATABASE_URL=postgresql+psycopg2://user:password@db:5432/multitalent
+            SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://user:password@db:5432/multitalent
+            RESET_TOKEN_HOURS=2
+            MAIL_PORT=587
+            SECRET_KEY=circleci_dummy_secret
+            EOF
 
       - run:
           name: show-services
@@ -183,6 +178,7 @@ jobs:
                   exit 0
                 fi
               done
+
               echo "Esperando API..."
               if [ $i -eq 20 ] || [ $i -eq 45 ] || [ $i -eq 75 ]; then
                 docker compose ps || true
