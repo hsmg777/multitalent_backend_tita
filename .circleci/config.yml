@@ -9,13 +9,10 @@ jobs:
           POSTGRES_DB: multitalent
           POSTGRES_USER: user
           POSTGRES_PASSWORD: password
-
     environment:
-      DATABASE_URL: postgresql+psycopg2://user:password@127.0.0.1:5432/multitalent
-      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://user:password@127.0.0.1:5432/multitalent
-
+      DATABASE_URL: postgresql+psycopg2://user:password@localhost:5432/multitalent
+      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://user:password@localhost:5432/multitalent
     working_directory: ~/workspace
-
     steps:
       - checkout
 
@@ -23,11 +20,9 @@ jobs:
           name: wait-postgres
           command: |
             for i in $(seq 1 30); do
-              pg_isready -h 127.0.0.1 -U user && exit 0
+              pg_isready -h localhost -U user && break
               sleep 2
             done
-            echo "Postgres no estuvo listo a tiempo"
-            exit 1
 
       - run:
           name: install-deps
@@ -58,21 +53,21 @@ jobs:
           command: |
             pip install bandit
             bandit -r app -f xml -o bandit-report.xml || true
+            ls -lah bandit-report.xml || true
 
       - run:
           name: pytest
           command: |
             pip install pytest pytest-cov
             pytest -v --maxfail=1 --junitxml=pytest-report.xml --cov=app --cov-report=xml:coverage.xml
+            ls -lah pytest-report.xml coverage.xml || true
 
       - store_artifacts:
           path: pytest-report.xml
           destination: reports/pytest
-
       - store_artifacts:
           path: coverage.xml
           destination: reports/coverage
-
       - store_artifacts:
           path: bandit-report.xml
           destination: reports/security
@@ -85,42 +80,64 @@ jobs:
             - bandit-report.xml
             - sonar-project.properties
 
-
   sonarqube-scan:
     machine: true
     working_directory: ~/project
-
     steps:
       - checkout
-
       - attach_workspace:
           at: ~/project
 
       - run:
-          name: validate-sonar-env
+          name: create-network
           command: |
-            if [ -z "${SONAR_HOST_URL}" ]; then echo "Falta SONAR_HOST_URL"; exit 1; fi
-            if [ -z "${SONAR_TOKEN}" ]; then echo "Falta SONAR_TOKEN"; exit 1; fi
-            echo "SONAR_HOST_URL=${SONAR_HOST_URL}"
+            docker network inspect multitalent_net >/dev/null 2>&1 || docker network create multitalent_net
+
+      - run:
+          name: up-sonarqube
+          command: |
+            docker compose up -d sonar_db sonarqube
+
+      - run:
+          name: wait-sonarqube-up
+          command: |
+            for i in $(seq 1 150); do
+              status=$(curl -s http://localhost:9000/api/system/status | grep -o 'UP\|STARTING\|DOWN' || true)
+              echo "SonarQube status: $status"
+              if [ "$status" = "UP" ]; then exit 0; fi
+              sleep 2
+            done
+            echo "SonarQube no subió a UP"
+            docker compose logs sonarqube || true
+            exit 1
 
       - run:
           name: sonar-scan
           command: |
-            docker run --rm \
+            # Asegura que los reportes existan en este job (vienen del workspace)
+            ls -lah coverage.xml pytest-report.xml bandit-report.xml sonar-project.properties || true
+
+            docker run --rm --network host \
               -v "$(pwd):/usr/src" \
               -w /usr/src \
               sonarsource/sonar-scanner-cli:latest \
               sonar-scanner \
-                -Dsonar.host.url="${SONAR_HOST_URL}" \
-                -Dsonar.token="${SONAR_TOKEN}" \
+                -Dsonar.host.url="http://localhost:9000" \
+                -Dsonar.login="admin" \
+                -Dsonar.password="admin" \
                 -Dsonar.qualitygate.wait=true \
-                -Dsonar.projectVersion="${CIRCLE_SHA1}"
+                -Dsonar.projectVersion="${CIRCLE_SHA1}" \
+                -Dsonar.python.version="3.12"
 
+      - run:
+          name: down-sonarqube
+          when: always
+          command: |
+            docker compose down -v
 
   zap-dast:
     machine: true
     working_directory: ~/project
-
     steps:
       - checkout
 
@@ -132,19 +149,19 @@ jobs:
       - run:
           name: ensure-env-file
           command: |
-            rm -f .env
-            printf "POSTGRES_DB=multitalent\n" >> .env
-            printf "POSTGRES_USER=user\n" >> .env
-            printf "POSTGRES_PASSWORD=password\n" >> .env
-            printf "DB_HOST=db\n" >> .env
-            printf "DB_PORT=5432\n" >> .env
-            printf "DATABASE_URL=postgresql+psycopg2://user:password@db:5432/multitalent\n" >> .env
-            printf "SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://user:password@db:5432/multitalent\n" >> .env
-            printf "RESET_TOKEN_HOURS=2\n" >> .env
-            printf "MAIL_PORT=587\n" >> .env
-            printf "SECRET_KEY=circleci_dummy_secret\n" >> .env
-            echo ".env creado:"
-            cat .env
+            # Evita heredoc << que te está rompiendo el pipeline
+            printf "%s\n" \
+              "POSTGRES_DB=multitalent" \
+              "POSTGRES_USER=user" \
+              "POSTGRES_PASSWORD=password" \
+              "DB_HOST=db" \
+              "DB_PORT=5432" \
+              "DATABASE_URL=postgresql+psycopg2://user:password@db:5432/multitalent" \
+              "SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://user:password@db:5432/multitalent" \
+              "RESET_TOKEN_HOURS=2" \
+              "MAIL_PORT=587" \
+              "SECRET_KEY=circleci_dummy_secret" \
+              > .env
 
       - run:
           name: show-services
@@ -170,7 +187,6 @@ jobs:
                   exit 0
                 fi
               done
-
               echo "Esperando API..."
               if [ $i -eq 20 ] || [ $i -eq 45 ] || [ $i -eq 75 ]; then
                 docker compose ps || true
