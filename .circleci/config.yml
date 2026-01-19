@@ -91,6 +91,22 @@ jobs:
           at: ~/project
 
       - run:
+          name: ensure-env-file
+          command: |
+             printf "%s\n" \
+               "POSTGRES_DB=multitalent" \
+               "POSTGRES_USER=user" \
+               "POSTGRES_PASSWORD=password" \
+               "DB_HOST=db" \
+               "DB_PORT=5432" \
+               "DATABASE_URL=postgresql+psycopg2://user:password@db:5432/multitalent" \
+               "SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://user:password@db:5432/multitalent" \
+               "RESET_TOKEN_HOURS=2" \
+               "MAIL_PORT=587" \
+               "SECRET_KEY=circleci_dummy_secret" \
+               > .env
+
+      - run:
           name: create-network
           command: |
             docker network inspect multitalent_net >/dev/null 2>&1 || docker network create multitalent_net
