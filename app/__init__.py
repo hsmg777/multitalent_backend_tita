@@ -55,4 +55,8 @@ def create_app(config_name=None):
     register_resources(app)
     app_cli.register_cli(app)
 
+    # Initialize Metrics
+    from .ext.monitor import init_app as init_metrics
+    init_metrics(app)
+
     return app
